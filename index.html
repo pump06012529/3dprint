@@ -310,11 +310,13 @@
         import { SVGLoader } from 'three/addons/loaders/SVGLoader.js';
         import { STLExporter } from 'three/addons/exporters/STLExporter.js';
         import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+        import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
         
         window.THREE = THREE;
         window.SVGLoader = SVGLoader;
         window.STLExporter = STLExporter;
         window.OrbitControls = OrbitControls;
+        window.mergeGeometries = mergeGeometries;
     </script>
 
 </head>
@@ -1130,6 +1132,7 @@
                 const extrudePaths = (svgData, material, depth, zOffset, isBase) => {
                     const paths = svgData.paths;
                     const group = new window.THREE.Group();
+                    const geometries = [];
                     
                     for (let i = 0; i < paths.length; i++) {
                         const path = paths[i];
@@ -1144,21 +1147,29 @@
                                 bevelEnabled: false
                             });
                             
-                            const mesh = new window.THREE.Mesh(geometry, material);
-                            mesh.position.z = zOffset;
-                            
-                            // If it is the base, we need to scale it down by 1/renderScale
-                            // because it was traced from a high-res canvas
-                            // And shift it back by marginHR to align with the detail mesh
+                            // Apply transforms directly to geometry before merging
                             if (isBase) {
-                                mesh.scale.set(1 / renderScale, 1 / renderScale, 1);
-                                mesh.position.x = -(marginHR / renderScale);
-                                mesh.position.y = -(marginHR / renderScale);
+                                geometry.scale(1 / renderScale, 1 / renderScale, 1);
+                                geometry.translate(-(marginHR / renderScale), -(marginHR / renderScale), zOffset);
+                            } else {
+                                geometry.translate(0, 0, zOffset);
                             }
                             
-                            group.add(mesh);
+                            geometries.push(geometry);
                         }
                     }
+                    
+                    // Merge all geometries into one single solid mesh
+                    if (geometries.length > 0) {
+                        const mergedGeometry = window.mergeGeometries(geometries);
+                        if (mergedGeometry) {
+                            const mesh = new window.THREE.Mesh(mergedGeometry, material);
+                            group.add(mesh);
+                        }
+                        // Dispose individual geometries to free memory
+                        geometries.forEach(g => g.dispose());
+                    }
+                    
                     return group;
                 };
 
