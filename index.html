@@ -962,7 +962,31 @@
                         }
                     }
                     
-                    // --- Solid Fill (Remove Internal Holes) ---
+                    // --- Save detail canvas BEFORE flood fill ---
+                    // Create a clean trace of the design (with holes preserved) for the detail layer
+                    const detailCanvas = document.createElement('canvas');
+                    detailCanvas.width = canvas.width;
+                    detailCanvas.height = canvas.height;
+                    const detailCtx = detailCanvas.getContext('2d');
+                    // Draw only the original SVG (without padding dilation) centered at marginHR
+                    detailCtx.fillStyle = '#FFFFFF';
+                    detailCtx.fillRect(0, 0, detailCanvas.width, detailCanvas.height);
+                    detailCtx.drawImage(img, marginHR, marginHR, hrWidth, hrHeight);
+                    // Threshold detail canvas to clean black/white
+                    const detailIdata = detailCtx.getImageData(0, 0, detailCanvas.width, detailCanvas.height);
+                    const dd = detailIdata.data;
+                    for (let i = 0; i < dd.length; i += 4) {
+                        const avg = (dd[i] + dd[i+1] + dd[i+2]) / 3;
+                        if (avg > 240) {
+                            dd[i] = dd[i+1] = dd[i+2] = 255;
+                        } else {
+                            dd[i] = dd[i+1] = dd[i+2] = 0;
+                        }
+                    }
+                    detailCtx.putImageData(detailIdata, 0, 0);
+                    const detailDataUrl = detailCanvas.toDataURL();
+
+                    // --- Solid Fill (Remove Internal Holes) for BASE ---
                     // Run a Breadth-First Search (Flood Fill) from the background edges.
                     // Anything NOT visited is part of the solid silhouette, closing all internal holes.
                     const w = canvas.width;
@@ -1092,12 +1116,20 @@
                     ctx.arc(ringCenterX, ringCenterY, ringRadiusPx * 0.5, 0, Math.PI * 2);
                     ctx.fill();
 
+                    // Trace the BASE silhouette (solid, with ring)
                     const contourDataUrl = canvas.toDataURL();
                     ImageTracer.imageToSVG(
                         contourDataUrl,
                         (contourSvgString) => {
-                             // contourSvgString is now in 0-2000 coordinate space with a margin
-                             this.build3DMesh(svgString, contourSvgString, baseThickness, detailThickness, scale, renderScale, marginHR, patternStyle);
+                            // Now trace the DETAIL layer (clean, with holes preserved)
+                            ImageTracer.imageToSVG(
+                                detailDataUrl,
+                                (detailSvgString) => {
+                                    // Both base and detail are now clean traced SVGs without overlapping paths
+                                    this.build3DMesh(detailSvgString, contourSvgString, baseThickness, detailThickness, scale, renderScale, marginHR, patternStyle);
+                                },
+                                'posterized2'
+                            );
                         },
                         'posterized2'
                     );
@@ -1129,7 +1161,7 @@
                     roughness: 0.6
                 });
 
-                const extrudePaths = (svgData, material, depth, zOffset, isBase) => {
+                const extrudePaths = (svgData, material, depth, zOffset, skipWhite) => {
                     const paths = svgData.paths;
                     const group = new window.THREE.Group();
                     const geometries = [];
@@ -1137,7 +1169,8 @@
                     for (let i = 0; i < paths.length; i++) {
                         const path = paths[i];
                         const color = path.color;
-                        if (isBase && color.r > 0.9 && color.g > 0.9 && color.b > 0.9) continue;
+                        // Skip white/light paths (background from ImageTracer)
+                        if (skipWhite && color.r > 0.9 && color.g > 0.9 && color.b > 0.9) continue;
 
                         const shapes = window.SVGLoader.createShapes(path);
                         for (let j = 0; j < shapes.length; j++) {
@@ -1147,13 +1180,10 @@
                                 bevelEnabled: false
                             });
                             
-                            // Apply transforms directly to geometry before merging
-                            if (isBase) {
-                                geometry.scale(1 / renderScale, 1 / renderScale, 1);
-                                geometry.translate(-(marginHR / renderScale), -(marginHR / renderScale), zOffset);
-                            } else {
-                                geometry.translate(0, 0, zOffset);
-                            }
+                            // Both base and detail are now from the high-res canvas space,
+                            // so both need renderScale and marginHR adjustment
+                            geometry.scale(1 / renderScale, 1 / renderScale, 1);
+                            geometry.translate(-(marginHR / renderScale), -(marginHR / renderScale), zOffset);
                             
                             geometries.push(geometry);
                         }
